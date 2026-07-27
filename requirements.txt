@@ -5,3 +5,4 @@ duckduckgo-search
 ddgs
 requests
 beautifulsoup4
+stripe

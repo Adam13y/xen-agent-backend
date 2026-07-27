@@ -15,14 +15,27 @@ import threading
 import datetime
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+try:
+    import stripe  # optional: only used when STRIPE_KEY is configured
+except ImportError:  # pragma: no cover
+    stripe = None
+
 MODEL = os.getenv("CLAUDE_MIND_MODEL", "claude-haiku-4-5")
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 BUY_URL = "https://claudemind.gumroad.com/l/zfseds"
+
+# Stripe subscription config (all optional — mock fallback to Gumroad when unset)
+STRIPE_KEY = os.getenv("STRIPE_KEY", "")
+STRIPE_PRICE = os.getenv("STRIPE_PRICE", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+STRIPE_ENABLED = bool(STRIPE_KEY and STRIPE_KEY != "SKIP" and STRIPE_PRICE and stripe is not None)
+SUCCESS_URL = "https://claudemindstarter.netlify.app/thanks"
+CANCEL_URL = "https://claudemindstarter.netlify.app"
 MAX_RUNS = 7
 COST_PER_M = (1.0, 5.0)  # haiku 4.5 $/M tokens (input, output)
 
@@ -42,6 +55,9 @@ app.add_middleware(
 # ---------------------------------------------------------------- trial store
 _runs: Dict[str, int] = {}
 _lock = threading.Lock()
+
+# trial_id -> True once a subscription checkout completes (in-memory, like _runs)
+subscriptions: Dict[str, bool] = {}
 
 
 def consume_run(trial_id: str) -> Optional[int]:
@@ -269,11 +285,51 @@ class RunRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "stripe": STRIPE_ENABLED}
+
+
+@app.get("/subscribe/{trial_id}")
+def subscribe(trial_id: str):
+    """Return a checkout URL for this trial. Mock fallback: Gumroad."""
+    if not STRIPE_ENABLED:
+        return {"checkout_url": BUY_URL}
+    stripe.api_key = STRIPE_KEY
+    try:
+        session = stripe.checkout.Session.create(
+            mode="subscription",
+            line_items=[{"price": STRIPE_PRICE, "quantity": 1}],
+            success_url=SUCCESS_URL,
+            cancel_url=CANCEL_URL,
+            metadata={"trial_id": trial_id},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {e}")
+    return {"checkout_url": session.url}
+
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    """Stripe webhook. Without keys configured, log and accept everything."""
+    payload = await request.body()
+    if not STRIPE_ENABLED or not STRIPE_WEBHOOK_SECRET:
+        print(f"[webhook] received {len(payload)} bytes (stripe disabled, ignoring)")
+        return {"received": True}
+    sig = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid webhook: {e}")
+    if event["type"] == "checkout.session.completed":
+        trial_id = (event["data"]["object"].get("metadata") or {}).get("trial_id", "")
+        if trial_id:
+            with _lock:
+                subscriptions[trial_id.strip().lower()] = True
+            print(f"[webhook] subscription activated for {trial_id}")
+    return {"received": True}
 
 
 @app.post("/run")
-def run(req: RunRequest):
+def run(req: RunRequest, request: Request):
     if not TRIAL_ID_RE.match(req.trial_id.strip().lower()):
         raise HTTPException(status_code=400, detail="Invalid trial ID.")
     if not req.vault_files or len(req.vault_files) > MAX_FILE_COUNT:
@@ -284,10 +340,17 @@ def run(req: RunRequest):
     trial_id = req.trial_id.strip().lower()
     used = consume_run(trial_id)
     if used is None:
-        return JSONResponse(
-            status_code=403,
-            content={"error": f"Trial expired. Buy the full version at {BUY_URL}", "expired": True},
-        )
+        if subscriptions.get(trial_id):
+            used = MAX_RUNS  # active subscriber: unlimited runs past the trial
+        else:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Trial expired. Please subscribe to continue.",
+                    "expired": True,
+                    "subscribe_url": f"{request.base_url}subscribe/{trial_id}",
+                },
+            )
 
     if not API_KEY:
         refund_run(trial_id)
