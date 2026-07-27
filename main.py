@@ -20,11 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-MODEL = os.getenv("CLAUDE_MIND_MODEL", "claude-3-5-sonnet-20240620")
+MODEL = os.getenv("CLAUDE_MIND_MODEL", "claude-haiku-4-5")
 API_KEY = os.getenv("ANTHROPIC_API_KEY")
 BUY_URL = "https://claudemind.gumroad.com/l/zfseds"
 MAX_RUNS = 7
-COST_PER_M = (3.0, 15.0)  # sonnet $/M tokens (input, output)
+COST_PER_M = (1.0, 5.0)  # haiku 4.5 $/M tokens (input, output)
 
 # Guardrails so a single request can't burn the shared key
 MAX_VAULT_CHARS = 120_000     # total incoming vault text
