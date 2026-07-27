@@ -34,8 +34,8 @@ STRIPE_KEY = os.getenv("STRIPE_KEY", "")
 STRIPE_PRICE = os.getenv("STRIPE_PRICE", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 STRIPE_ENABLED = bool(STRIPE_KEY and STRIPE_KEY != "SKIP" and STRIPE_PRICE and stripe is not None)
-SUCCESS_URL = "https://claudemindstarter.netlify.app/thanks"
-CANCEL_URL = "https://claudemindstarter.netlify.app"
+SUCCESS_URL = "https://xenai-hq.netlify.app/thanks"
+CANCEL_URL = "https://xenai-hq.netlify.app"
 MAX_RUNS = 7
 COST_PER_M = (1.0, 5.0)  # haiku 4.5 $/M tokens (input, output)
 
