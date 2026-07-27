@@ -156,7 +156,13 @@ def run_executor(client, brief: str, meter: CostMeter) -> str:
                 out = fn(**block.input) if fn else f"Unknown tool {block.name}"
                 results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
         messages.append({"role": "user", "content": results})
-    return "Executor stopped after the tool-call limit. Partial work only."
+    # Tool budget exhausted: force a final report from whatever was gathered.
+    messages.append({"role": "user", "content":
+                     "Stop using tools now. Write your best report from what you have; "
+                     "if searches failed, say so and answer from your own knowledge, clearly labeled."})
+    resp = client.messages.create(model=MODEL, max_tokens=1500, system=system, messages=messages)
+    meter.add(resp.usage)
+    return "".join(b.text for b in resp.content if b.type == "text")
 
 
 def run_round(vault_files: Dict[str, str]) -> dict:
